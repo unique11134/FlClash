@@ -1,0 +1,109 @@
+name: iOS 27
+
+on:
+  push:
+    branches: [codex/ios27-port]
+  pull_request:
+    branches: [codex/ios27-port]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Verify submodules and SDK
+        run: |
+          git submodule status --recursive | tee /tmp/flclash-submodules
+          if grep -Eq '^[+-U]' /tmp/flclash-submodules; then exit 1; fi
+          xcodebuild -version
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = 27.2
+          pod --version
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.6'
+          cache: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: core/go.sum
+      - name: Install pinned Rust and Apple targets
+        working-directory: plugins/rust_api/rust
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup target add --toolchain 1.99.0 aarch64-apple-ios aarch64-apple-ios-sim
+          rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plugins/rust_api/rust
+      - name: Prepare the pinned Core CA bundle
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" https://curl.se/ca/cacert-2026-09-25.pem
+          echo "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505  $bundle" | sha256sum -c -
+      - name: Resolve packages and analyze
+        run: |
+          flutter --version
+          flutter config --no-enable-swift-package-manager
+          flutter pub get
+          flutter analyze --no-fatal-infos
+      - name: Test Core and Flutter bridge
+        run: |
+          (cd core && CGO_ENABLED=0 go test -mod=readonly ./...)
+          flutter test test/core/ios_test.dart
+      - name: Compile mihomo for iOS and Simulator
+        run: |
+          mkdir -p build/ios-logs
+          bash tool/build_ios_core.sh 2>&1 | tee build/ios-logs/core.log
+      - name: Resolve CocoaPods
+        run: |
+          flutter build ios --config-only --no-codesign
+          pod install --project-directory=ios
+      - name: Build Flutter and Packet Tunnel for the simulator
+        run: flutter build ios --debug --simulator 2>&1 | tee build/ios-logs/simulator.log
+      - name: Build unsigned arm64 application and Packet Tunnel
+        run: flutter build ios --release --no-codesign 2>&1 | tee build/ios-logs/device.log
+      - name: Validate package and archive unsigned build
+        run: |
+          app=build/ios/iphoneos/Runner.app
+          extension="$app/PlugIns/PacketTunnel.appex"
+          test -x "$app/Runner"
+          test -x "$extension/PacketTunnel"
+          for binary in "$app/Runner" "$extension/PacketTunnel"; do
+            xcrun lipo -verify_arch arm64 "$binary"
+            xcrun vtool -show-build "$binary"
+          done
+          plutil -lint "$app/Info.plist" "$extension/Info.plist"
+          tar -C build/ios/iphoneos -czf build/FlClash-iOS-arm64-unsigned.tar.gz Runner.app
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: build/ios-logs/
+          if-no-files-found: ignore
+      - name: Upload unsigned application
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlClash-iOS-arm64-unsigned
+          path: build/FlClash-iOS-arm64-unsigned.tar.gz
+          if-no-files-found: error
