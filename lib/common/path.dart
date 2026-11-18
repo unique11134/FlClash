@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:fl_clash/common/common.dart';
+import 'package:fl_clash/core/ios.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 class AppPath {
   static AppPath? _instance;
   late ResolveOnce<Directory> _dataDir;
+  late ResolveOnce<Directory> _coreDir;
   late ResolveOnce<Directory?> _downloadDir;
   late ResolveOnce<Directory> _tempDir;
   Completer<Directory> cacheDir = Completer();
@@ -42,6 +44,10 @@ class AppPath {
 
   void _bind() {
     _dataDir = ResolveOnce(supportDirectory);
+    _coreDir = ResolveOnce(() async {
+      if (system.isIOS) return Directory(await iosCore.homePath);
+      return _dataDir.value;
+    });
     _downloadDir = ResolveOnce(downloadDirectory);
     _tempDir = ResolveOnce(temporaryDirectory);
     cacheDirectory().then(cacheDir.complete);
@@ -75,13 +81,12 @@ class AppPath {
   }
 
   Future<String> get homeDirPath async {
-    final directory = await _dataDir.value;
+    final directory = await _coreDir.value;
     return directory.path;
   }
 
   Future<String> get databasePath async {
-    final mHomeDirPath = await homeDirPath;
-    return join(mHomeDirPath, 'database.sqlite');
+    return join((await _dataDir.value).path, 'database.sqlite');
   }
 
   Future<String> get tempFilePath async {
@@ -114,8 +119,7 @@ class AppPath {
   }
 
   Future<String> get profilesPath async {
-    final directory = await _dataDir.value;
-    return join(directory.path, profilesDirectoryName);
+    return join(await homeDirPath, profilesDirectoryName);
   }
 
   Future<String> getProfilePath(String fileName) async {

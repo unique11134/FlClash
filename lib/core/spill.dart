@@ -12,8 +12,11 @@ import 'method.dart';
 const coreSpillDirectoryName = 'responses';
 
 Future<bool> _isSpilled(String file) async {
-  final directory = join(await appPath.homeDirPath, coreSpillDirectoryName);
-  return equals(dirname(file), directory);
+  final home = await appPath.homeDirPath;
+  final parent = dirname(file);
+  return equals(parent, join(home, coreSpillDirectoryName)) ||
+      system.isIOS &&
+          equals(parent, join(dirname(home), 'Tunnel', coreSpillDirectoryName));
 }
 
 /// Parsed where a transport decodes them, off the UI isolate for a large one.

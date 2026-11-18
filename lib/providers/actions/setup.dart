@@ -50,11 +50,26 @@ class SetupAction extends _$SetupAction {
   @override
   void build() {
     ref.onDispose(_stopRuntimeTicker);
+    if (system.isIOS) {
+      final statuses = iosCore.statuses.listen(_syncIOSStatus);
+      ref.onDispose(() => unawaited(statuses.cancel()));
+    }
     ref.listen(appVisibleProvider, (_, _) => _syncRuntimeTicker());
     ref.listen(
       appSettingProvider.select((state) => state.showTrayTitle),
       (_, _) => _syncRuntimeTicker(),
     );
+  }
+
+  void _syncIOSStatus(IOSVpnStatus status) {
+    if (status.running) {
+      _startTime = status.connectedAt ?? _startTime ?? DateTime.now();
+    } else {
+      _startTime = null;
+      ref.read(runningVpnOptionsProvider.notifier).value = null;
+    }
+    _updateRunTime();
+    _syncRuntimeTicker();
   }
 
   bool get _isTrafficShown =>
@@ -141,7 +156,11 @@ class SetupAction extends _$SetupAction {
   }
 
   @protected
-  Future<DateTime?> serviceStartTime() async => service?.getRunTime();
+  Future<DateTime?> serviceStartTime() async {
+    if (!system.isIOS) return service?.getRunTime();
+    final status = await iosCore.getStatus();
+    return status.running ? status.connectedAt ?? DateTime.now() : null;
+  }
 
   Future<void> initStatus() async {
     if (!globalState.needInitStatus) {
@@ -177,7 +196,7 @@ class SetupAction extends _$SetupAction {
       previousStartTime: _startTime,
     );
     _latestRunRequest = request;
-    _setLocalRunning(running);
+    if (!system.isIOS) _setLocalRunning(running);
     if (request.initialize) {
       globalState.needInitStatus = false;
     }
@@ -202,6 +221,10 @@ class SetupAction extends _$SetupAction {
     }
 
     try {
+      if (system.isIOS && !await inputsApplied()) {
+        if (!await applyProfile(force: true)) return false;
+        if (!_isCurrent(request)) return true;
+      }
       await _startCoreRunning(request);
     } catch (_) {
       _rollbackRunning(request);
@@ -305,7 +328,7 @@ class SetupAction extends _$SetupAction {
   }
 
   void _rollbackRunning(_RunRequest request) {
-    if (!_isCurrent(request)) {
+    if (system.isIOS || !_isCurrent(request)) {
       return;
     }
     _startTime = request.previousStartTime;

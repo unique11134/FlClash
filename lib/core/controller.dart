@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/core/core.dart';
 import 'package:fl_clash/core/interface.dart';
+import 'package:fl_clash/core/ios.dart';
 import 'package:fl_clash/core/spill.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/models/models.dart';
@@ -18,9 +19,11 @@ extension type CoreController._(CoreHandlerInterface _interface)
   static CoreController? _instance;
 
   factory CoreController() {
-    return _instance ??= CoreController._(
-      system.isAndroid ? coreLib! : coreService!,
-    );
+    return _instance ??= CoreController._(switch (system) {
+      final platform when platform.isIOS => iosCore,
+      final platform when platform.isAndroid => coreLib!,
+      _ => coreService!,
+    });
   }
 
   @visibleForTesting
@@ -162,6 +165,11 @@ extension type CoreController._(CoreHandlerInterface _interface)
   }) async {
     if (preloadInvoke == null) {
       return _interface.setupConfig(params);
+    }
+    if (system.isIOS) {
+      await _interface.setupConfig(params);
+      await preloadInvoke();
+      return;
     }
     await (_interface.setupConfig(params), preloadInvoke()).wait;
   }

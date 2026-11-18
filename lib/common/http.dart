@@ -37,7 +37,7 @@ class FlClashHttpOverrides extends HttpOverrides {
   }
 
   static String findProxyForReader(ProviderReader read, Uri url) {
-    if ([localhost].contains(url.host)) {
+    if (system.isIOS || [localhost].contains(url.host)) {
       return 'DIRECT';
     }
     final isStart = read(isStartProvider);
