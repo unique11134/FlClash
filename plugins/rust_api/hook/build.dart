@@ -11,12 +11,12 @@ void main(List<String> args) async {
     }
     await FlutterRustBridgeNativeAssetsBuilder(
       cratePath: 'rust',
-      extraCargoEnvironmentVariables: _bindgenEnvironment(input),
+      extraCargoEnvironmentVariables: _cargoEnvironment(input),
     ).run(input: input, output: output);
   });
 }
 
-Map<String, String> _bindgenEnvironment(BuildInput input) {
+Map<String, String> _cargoEnvironment(BuildInput input) {
   if (!input.config.buildCodeAssets) return const {};
   final code = input.config.code;
   if (code.targetOS == OS.iOS) {
@@ -33,6 +33,7 @@ Map<String, String> _bindgenEnvironment(BuildInput input) {
         '${os.targetVersion}.0';
     final triple = 'arm64-apple-ios$deployment${simulator ? '-simulator' : ''}';
     return {
+      'IPHONEOS_DEPLOYMENT_TARGET': deployment,
       'LIBCLANG_PATH': '${clang.parent.parent.path}/lib',
       'BINDGEN_EXTRA_CLANG_ARGS': '-isysroot "$sdk" --target=$triple',
     };
