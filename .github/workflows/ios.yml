@@ -102,9 +102,17 @@ jobs:
           flutter build ios --config-only --no-codesign
           pod install --project-directory=ios
       - name: Build Flutter and Packet Tunnel for the simulator
-        run: flutter build ios --debug --simulator 2>&1 | tee build/ios-logs/simulator.log
+        run: |
+          if ! flutter --verbose build ios --debug --simulator > build/ios-logs/simulator.log 2>&1; then
+            tail -n 100 build/ios-logs/simulator.log
+            exit 1
+          fi
       - name: Build unsigned arm64 application and Packet Tunnel
-        run: flutter build ios --release --no-codesign 2>&1 | tee build/ios-logs/device.log
+        run: |
+          if ! flutter --verbose build ios --release --no-codesign > build/ios-logs/device.log 2>&1; then
+            tail -n 100 build/ios-logs/device.log
+            exit 1
+          fi
       - name: Validate package and archive unsigned build
         run: |
           app=build/ios/iphoneos/Runner.app
