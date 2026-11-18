@@ -102,7 +102,7 @@ func handleDecryptConfig(params DecryptConfigParams) (string, error) {
 
 // mihomo writes the NTP time with settimeofday, which Android's app seccomp
 // policy answers by killing the process rather than with EPERM.
-var systemTimeWritable = runtime.GOOS != "android"
+var systemTimeWritable = runtime.GOOS != "android" && runtime.GOOS != "ios"
 
 func loadConfig(path string) (*config.Config, error) {
 	buf, err := os.ReadFile(path)
@@ -118,8 +118,17 @@ func loadConfig(path string) (*config.Config, error) {
 
 func withPlatformLimits(cfg *config.Config) *config.Config {
 	if cfg.NTP.WriteToSystem && !systemTimeWritable {
-		log.Warnln("ntp write-to-system ignored: Android does not let apps set the system time")
+		log.Warnln("ntp write-to-system ignored on %s", runtime.GOOS)
 		cfg.NTP.WriteToSystem = false
+	}
+	if runtime.GOOS == "ios" {
+		cfg.Controller = &config.Controller{}
+		cfg.Tunnels = nil
+		cfg.DNS.Listen = ""
+		cfg.DNS.Enable = true
+		if len(cfg.DNS.NameServer) == 0 {
+			cfg.DNS.NameServer = cfg.DNS.DefaultNameserver
+		}
 	}
 	return cfg
 }
@@ -141,9 +150,14 @@ func applyConfig(params *SetupParams) error {
 	configMu.Lock()
 	defer configMu.Unlock()
 
-	applyOptions(params.Options)
+	if runtime.GOOS != "ios" {
+		applyOptions(params.Options)
+	}
 	cfg, err := loadSetupConfig(params)
 	if err != nil {
+		if runtime.GOOS == "ios" {
+			return &MethodError{Code: "config_rejected", Message: err.Error()}
+		}
 		// The fallback is what keeps the listeners serving while the host
 		// reports the error, but it applies a config with no proxies in it.
 		// From the UI that is indistinguishable from a subscription that went
@@ -158,6 +172,9 @@ func applyConfig(params *SetupParams) error {
 			return err
 		}
 		cfg = fallback
+	}
+	if runtime.GOOS == "ios" {
+		applyOptions(params.Options)
 	}
 
 	currentConfig = cfg
@@ -224,7 +241,9 @@ func updateConfig(params *UpdateParams) error {
 	if params.Tun != nil {
 		patchTun(&general.Tun, params.Tun)
 	}
-	patchController(params)
+	if runtime.GOOS != "ios" {
+		patchController(params)
+	}
 	if params.Authentication != nil {
 		applyAuthentication(currentConfig, *params.Authentication)
 	}

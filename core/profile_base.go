@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/metacubex/mihomo/component/age"
@@ -107,12 +108,19 @@ func loadConfigWithBase(base *SetupBase, configPath string) (*config.Config, err
 	if err := document.Decode(raw); err != nil {
 		return nil, err
 	}
-	if err := writeConfigDocument(configPath, document); err != nil {
-		return nil, err
+	if runtime.GOOS != "ios" {
+		if err := writeConfigDocument(configPath, document); err != nil {
+			return nil, err
+		}
 	}
 	cfg, err := config.ParseRawConfig(raw)
 	if err != nil {
 		return nil, err
+	}
+	if runtime.GOOS == "ios" {
+		if err := writeConfigDocument(configPath, document); err != nil {
+			return nil, err
+		}
 	}
 	return withPlatformLimits(cfg), nil
 }

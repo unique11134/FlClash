@@ -64,7 +64,7 @@ func handleStopListener() {
 }
 
 func updateListeners(cfg *config.Config) {
-	if cfg == nil || !isRunning.Load() {
+	if cfg == nil || !isRunning.Load() || runtime.GOOS == "ios" {
 		return
 	}
 	general := cfg.General
