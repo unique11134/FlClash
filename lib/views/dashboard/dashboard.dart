@@ -2,11 +2,13 @@ import 'dart:math' as math;
 
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/core/core.dart';
+import 'package:fl_clash/core/ios.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/widgets/widgets.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/widgets.dart';
 
@@ -44,6 +46,29 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
   GlobalKey _cardKeyOf(DashboardWidget widget) =>
       _cardKeys.putIfAbsent(widget, GlobalKey.new);
 
+  Future<void> _showIOSVpnDiagnostics() async {
+    final report = await iosCore.diagnosticReport();
+    if (!mounted) return;
+    final l10n = context.appLocalizations;
+    final status = iosCore.lastStatus;
+    final summary = status?.permissionDenied == true
+        ? l10n.iosVpnSigningRequired
+        : status?.unavailable == true
+        ? l10n.iosVpnUnavailable
+        : null;
+    final copy = await dialogs.showMessage(
+      context: context,
+      title: l10n.iosVpnDiagnostics,
+      message: TextSpan(text: summary == null ? report : '$summary\n\n$report'),
+      confirmText: l10n.copy,
+      cancelText: l10n.close,
+    );
+    if (copy == true) {
+      await Clipboard.setData(ClipboardData(text: report));
+      if (mounted) dialogs.showBanner(l10n.copySuccess);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final platform = widget.platform ?? SupportPlatform.currentPlatform;
@@ -75,6 +100,12 @@ class _DashboardViewState extends ConsumerState<DashboardView> {
             )
           : null,
       iconActions: [
+        if (!editing && platform == SupportPlatform.iOS)
+          IconButtonData(
+            glyph: AppGlyphs.info,
+            tooltip: appLocalizations.iosVpnDiagnostics,
+            onPressed: _showIOSVpnDiagnostics,
+          ),
         if (editable && !editing)
           IconButtonData(
             glyph: AppGlyphs.edit,

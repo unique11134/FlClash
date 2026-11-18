@@ -1048,9 +1048,10 @@ class MessageLookup extends MessageLookupByLibrary {
     "installCertificateSuccess": MessageLookupByLibrary.simpleMessage(
       "Certificate installed",
     ),
-    "installedAppsPermissionDeniedMessage": MessageLookupByLibrary.simpleMessage(
-      "The app list permission was denied, so installed apps cannot be listed. Please grant it manually in system settings.",
-    ),
+    "installedAppsPermissionDeniedMessage":
+        MessageLookupByLibrary.simpleMessage(
+          "The app list permission was denied, so installed apps cannot be listed. Please grant it manually in system settings.",
+        ),
     "installedAppsPermissionDesc": MessageLookupByLibrary.simpleMessage(
       "This system hides the installed app list until the permission is granted. Authorize it to configure the per-app proxy.",
     ),
@@ -1112,6 +1113,15 @@ class MessageLookup extends MessageLookupByLibrary {
     ),
     "invalidRuleSet": m44,
     "invalidSubRule": m45,
+    "iosVpnDiagnostics": MessageLookupByLibrary.simpleMessage(
+      "iOS VPN diagnostics",
+    ),
+    "iosVpnSigningRequired": MessageLookupByLibrary.simpleMessage(
+      "iOS denied VPN access. Check the Network Extension and App Group permissions in the signing profiles for the app and its extension.",
+    ),
+    "iosVpnUnavailable": MessageLookupByLibrary.simpleMessage(
+      "iOS VPN is unavailable. Open VPN diagnostics for details.",
+    ),
     "ipAddress": MessageLookupByLibrary.simpleMessage("IP address"),
     "ipAsn": MessageLookupByLibrary.simpleMessage("ASN"),
     "ipFlagAbuser": MessageLookupByLibrary.simpleMessage("Abuse history"),

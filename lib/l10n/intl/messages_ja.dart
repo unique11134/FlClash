@@ -950,6 +950,13 @@ class MessageLookup extends MessageLookupByLibrary {
     ),
     "invalidRuleSet": m44,
     "invalidSubRule": m45,
+    "iosVpnDiagnostics": MessageLookupByLibrary.simpleMessage("iOS VPN 診断"),
+    "iosVpnSigningRequired": MessageLookupByLibrary.simpleMessage(
+      "iOS が VPN アクセスを拒否しました。アプリと拡張機能の署名プロファイルで Network Extension と App Group の権限を確認してください。",
+    ),
+    "iosVpnUnavailable": MessageLookupByLibrary.simpleMessage(
+      "iOS VPN は利用できません。VPN 診断で詳細を確認してください。",
+    ),
     "ipAddress": MessageLookupByLibrary.simpleMessage("IP アドレス"),
     "ipAsn": MessageLookupByLibrary.simpleMessage("ASN"),
     "ipFlagAbuser": MessageLookupByLibrary.simpleMessage("不正利用の履歴"),

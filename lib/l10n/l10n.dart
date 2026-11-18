@@ -160,6 +160,36 @@ class AppLocalizations {
     );
   }
 
+  /// `iOS VPN diagnostics`
+  String get iosVpnDiagnostics {
+    return Intl.message(
+      'iOS VPN diagnostics',
+      name: 'iosVpnDiagnostics',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `iOS denied VPN access. Check the Network Extension and App Group permissions in the signing profiles for the app and its extension.`
+  String get iosVpnSigningRequired {
+    return Intl.message(
+      'iOS denied VPN access. Check the Network Extension and App Group permissions in the signing profiles for the app and its extension.',
+      name: 'iosVpnSigningRequired',
+      desc: '',
+      args: [],
+    );
+  }
+
+  /// `iOS VPN is unavailable. Open VPN diagnostics for details.`
+  String get iosVpnUnavailable {
+    return Intl.message(
+      'iOS VPN is unavailable. Open VPN diagnostics for details.',
+      name: 'iosVpnUnavailable',
+      desc: '',
+      args: [],
+    );
+  }
+
   /// `Available`
   String get serviceAvailable {
     return Intl.message(
@@ -7663,8 +7693,7 @@ class AppLocalizations {
   String customImportDroppedSubRules(num count, Object label) {
     return Intl.plural(
       count,
-      one:
-          '1 SUB-RULE rule was dropped, since custom profiles do not support sub-rules',
+      one: '1 SUB-RULE rule was dropped, since custom profiles do not support sub-rules',
       other:
           '$label SUB-RULE rules were dropped, since custom profiles do not support sub-rules',
       name: 'customImportDroppedSubRules',

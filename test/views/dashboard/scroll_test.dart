@@ -48,6 +48,13 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
   }
 
+  testWidgets('the iOS dashboard exposes VPN diagnostics', (tester) async {
+    await pumpDashboard(tester, const Size(412, 700), SupportPlatform.iOS);
+    expect(find.byTooltip('iOS VPN diagnostics'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await teardown(tester);
+  });
+
   testWidgets('the phone cards keep their scroll end while scrolling', (
     tester,
   ) async {

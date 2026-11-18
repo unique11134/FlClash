@@ -80,10 +80,20 @@ extension type CoreController._(CoreHandlerInterface _interface)
   }
 
   Future<void> init(int version) async {
-    await ensureHomeDir();
-    await initGeo();
-    final homeDirPath = await appPath.homeDirPath;
-    await _interface.init(InitParams(homeDir: homeDirPath, version: version));
+    var stage = 'ensureHomeDir';
+    try {
+      await ensureHomeDir();
+      stage = 'initGeo';
+      await initGeo();
+      stage = 'invoke';
+      final homeDirPath = await appPath.homeDirPath;
+      await _interface.init(InitParams(homeDir: homeDirPath, version: version));
+    } catch (error) {
+      if (_interface case final CoreIOS core) {
+        core.recordInitFailure(stage, error);
+      }
+      rethrow;
+    }
   }
 
   /// An age-encrypted config is rewritten in place into its plaintext, and a

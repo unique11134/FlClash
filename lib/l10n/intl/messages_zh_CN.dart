@@ -864,6 +864,13 @@ class MessageLookup extends MessageLookupByLibrary {
     ),
     "invalidRuleSet": m44,
     "invalidSubRule": m45,
+    "iosVpnDiagnostics": MessageLookupByLibrary.simpleMessage("iOS VPN 诊断"),
+    "iosVpnSigningRequired": MessageLookupByLibrary.simpleMessage(
+      "iOS 拒绝了 VPN 访问。请检查主应用和扩展的签名描述文件是否包含 Network Extension 和 App Group 权限。",
+    ),
+    "iosVpnUnavailable": MessageLookupByLibrary.simpleMessage(
+      "iOS VPN 当前不可用。请打开 VPN 诊断查看详情。",
+    ),
     "ipAddress": MessageLookupByLibrary.simpleMessage("IP 地址"),
     "ipAsn": MessageLookupByLibrary.simpleMessage("ASN"),
     "ipFlagAbuser": MessageLookupByLibrary.simpleMessage("滥用记录"),

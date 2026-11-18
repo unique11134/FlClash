@@ -68,31 +68,49 @@ enum CoreBridge {
     }
 }
 
+struct CoreStorageError: LocalizedError {
+    let stage: String
+    let underlying: NSError
+    var errorDescription: String? { "CoreStorage.\(stage): \(underlying.localizedDescription)" }
+}
+
 struct CoreStorage {
     let root: URL
     let app: URL
     let tunnel: URL
     let rpc: URL
 
-    init() throws {
+    init(privateContainer: Bool = false) throws {
         let manager = FileManager.default
-        let group = Bundle.main.object(forInfoDictionaryKey: "FlClashAppGroup") as? String ?? ""
-        let container = manager.containerURL(forSecurityApplicationGroupIdentifier: group)
-        #if targetEnvironment(simulator)
-        let location = try container ?? manager.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: true)
-        #else
-        guard let location = container else {
-            throw TunnelError(message: "FlClash App Group is unavailable. Check the signing profile.")
+        let location: URL
+        if privateContainer {
+            do {
+                location = try manager.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                           appropriateFor: nil, create: true)
+            } catch {
+                throw CoreStorageError(stage: "applicationSupportDirectory", underlying: error as NSError)
+            }
+        } else {
+            let group = Bundle.main.object(forInfoDictionaryKey: "FlClashAppGroup") as? String ?? ""
+            guard !group.isEmpty, let container = manager.containerURL(forSecurityApplicationGroupIdentifier: group) else {
+                throw CoreStorageError(stage: "containerURL", underlying: NSError(
+                    domain: "FlClash.AppGroup", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "App Group container is unavailable. Check the signed App Group."]
+                ))
+            }
+            location = container
         }
-        #endif
         root = location.appendingPathComponent("FlClashCore", isDirectory: true)
         app = root.appendingPathComponent("App", isDirectory: true)
         tunnel = root.appendingPathComponent("Tunnel", isDirectory: true)
         rpc = root.appendingPathComponent("RPC", isDirectory: true)
-        for directory in [app, tunnel, rpc] {
-            try manager.createDirectory(at: directory, withIntermediateDirectories: true,
-                                        attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        for directory in privateContainer ? [app] : [app, tunnel, rpc] {
+            do {
+                try manager.createDirectory(at: directory, withIntermediateDirectories: true,
+                                            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            } catch {
+                throw CoreStorageError(stage: "createDirectory.\(directory.lastPathComponent)", underlying: error as NSError)
+            }
         }
     }
 

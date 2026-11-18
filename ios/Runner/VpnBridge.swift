@@ -1,6 +1,43 @@
+import Darwin
 import Flutter
 import Foundation
 import NetworkExtension
+import OSLog
+
+private struct BridgeFailure: Error {
+    let method: String
+    let stage: String
+    let category: String
+    let cause: NSError
+
+    var permissionDenied: Bool {
+        if category == "app_group" { return true }
+        guard category == "vpn" else { return false }
+        var error: NSError? = cause
+        for _ in 0..<8 {
+            guard let current = error else { break }
+            if (current.domain == "NEConfigurationErrorDomain" && current.code == 10) ||
+                (current.domain == NSPOSIXErrorDomain && (current.code == Int(EACCES) || current.code == Int(EPERM))) {
+                return true
+            }
+            error = current.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
+    }
+
+    var details: [String: Any] {
+        ["method": method, "stage": stage, "category": category,
+         "permissionDenied": permissionDenied, "error": Self.describe(cause, depth: 0)]
+    }
+
+    private static func describe(_ error: NSError, depth: Int) -> [String: Any] {
+        var value: [String: Any] = ["domain": error.domain, "code": error.code, "message": error.localizedDescription]
+        if depth < 7, let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+            value["underlying"] = describe(underlying, depth: depth + 1)
+        }
+        return value
+    }
+}
 
 @MainActor
 final class VpnBridge {
@@ -12,6 +49,12 @@ final class VpnBridge {
     private var version: Int?
     private var mutations: Task<Void, Never>?
     private var subscriptions: [String: Data] = [:]
+    private var storage: CoreStorage?
+    private var sharedStorageFailure: BridgeFailure?
+    private var vpnFailure: BridgeFailure?
+    private var extensionFailure: BridgeFailure?
+    private var failures: [String: BridgeFailure] = [:]
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FlClash", category: "iOSBridge")
 
     private static let offlineMethods: Set<String> = [
         "core.init", "core.initialized", "config.validate", "config.decrypt", "config.read",
@@ -25,7 +68,7 @@ final class VpnBridge {
         channel.setMethodCallHandler { [weak self] call, result in
             Task { @MainActor in
                 guard let self else {
-                    result(FlutterError(code: "ios_core", message: "VPN bridge is unavailable", details: nil))
+                    result(FlutterError(code: "ios_bridge_unavailable", message: "iOS bridge is unavailable", details: nil))
                     return
                 }
                 await self.handle(call, result: result)
@@ -48,14 +91,16 @@ final class VpnBridge {
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) async {
         do {
             switch call.method {
-            case "coreHome": result(try CoreStorage().app.path)
+            case "coreHome": result(try runnerStorage(method: call.method).app.path)
             case "status":
-                if manager == nil { manager = try await existingManager() }
+                await refreshStatus()
                 result(status())
+            case "diagnostics":
+                result(diagnostics())
             case "start": try await start(); result(status())
             case "stop": try await stop(); result(status())
             case "events":
-                let storage = try CoreStorage()
+                let storage = try runnerStorage(method: call.method)
                 let request = try CoreRequest(method: "ios.events").encoded()
                 let data: Data
                 if let session = activeSession {
@@ -74,7 +119,7 @@ final class VpnBridge {
                     mutations = Task { @MainActor in
                         await previous?.value
                         do { result(try await self.invoke(request, data: bytes.data)) }
-                        catch { result(Self.flutterError(error)) }
+                        catch { result(self.flutterError(error, method: request.method)) }
                     }
                 } else {
                     result(try await invoke(request, data: bytes.data))
@@ -82,21 +127,115 @@ final class VpnBridge {
             default: result(FlutterMethodNotImplemented)
             }
         } catch {
-            result(Self.flutterError(error))
+            result(flutterError(error, method: call.method))
         }
     }
 
-    private static func flutterError(_ error: Error) -> FlutterError {
-        FlutterError(code: "ios_core", message: error.localizedDescription, details: nil)
+    private func record(_ failure: BridgeFailure) {
+        failures["\(failure.method)/\(failure.stage)"] = failure
+        logger.error("\(failure.method, privacy: .public) \(failure.stage, privacy: .public) \(failure.cause.domain, privacy: .public) Code=\(failure.cause.code, privacy: .public) \(String(describing: failure.details), privacy: .private)")
+    }
+
+    private func flutterError(_ error: Error, method: String) -> FlutterError {
+        let failure = error as? BridgeFailure ??
+            BridgeFailure(method: method, stage: "dispatch", category: "bridge", cause: error as NSError)
+        record(failure)
+        if failure.permissionDenied && failure.category == "vpn" {
+            vpnFailure = failure
+            channel.invokeMethod("statusChanged", arguments: status())
+        }
+        return FlutterError(code: "ios_\(failure.category)", message: failure.cause.localizedDescription, details: failure.details)
+    }
+
+    private func runnerStorage(method: String) throws -> CoreStorage {
+        if let storage {
+            if let sharedStorageFailure, method == "coreHome" {
+                record(BridgeFailure(method: method, stage: sharedStorageFailure.stage,
+                                     category: sharedStorageFailure.category, cause: sharedStorageFailure.cause))
+            }
+            return storage
+        }
+        do {
+            let shared = try CoreStorage()
+            storage = shared
+            sharedStorageFailure = nil
+            return shared
+        } catch let error as CoreStorageError {
+            let failure = BridgeFailure(method: method, stage: "CoreStorage.AppGroup.\(error.stage)",
+                                        category: error.stage == "containerURL" ? "app_group" : "storage",
+                                        cause: error.underlying)
+            sharedStorageFailure = failure
+            record(failure)
+            channel.invokeMethod("statusChanged", arguments: status())
+        }
+        do {
+            let offline = try CoreStorage(privateContainer: true)
+            storage = offline
+            return offline
+        } catch let error as CoreStorageError {
+            throw BridgeFailure(method: method, stage: "CoreStorage.private.\(error.stage)",
+                                category: "storage", cause: error.underlying)
+        }
+    }
+
+    private func refreshStatus() async {
+        checkExtension()
+        guard manager == nil || vpnFailure != nil else { return }
+        let revision = intent
+        do {
+            let existing = try await existingManager(method: "status")
+            guard intent == revision else { return }
+            manager = existing
+            vpnFailure = nil
+        } catch {
+            guard intent == revision else { return }
+            let failure = error as? BridgeFailure ?? BridgeFailure(
+                method: "status", stage: "NETunnelProviderManager.loadAllFromPreferences", category: "vpn", cause: error as NSError
+            )
+            vpnFailure = failure
+            record(failure)
+        }
+    }
+
+    private lazy var extensionBundle: Bundle? = {
+        Bundle.main.builtInPlugInsURL.flatMap { Bundle(url: $0.appendingPathComponent("PacketTunnel.appex")) }
+    }()
+
+    private func checkExtension() {
+        guard extensionFailure == nil, extensionBundle?.bundleIdentifier != providerID else { return }
+        let failure = BridgeFailure(method: "status", stage: "embeddedPacketTunnel", category: "extension", cause: NSError(
+            domain: "FlClash.PacketTunnel", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "The installed Packet Tunnel is missing or its bundle identifier does not match the app."]
+        ))
+        extensionFailure = failure
+        record(failure)
+    }
+
+    private func diagnostics() -> [String: Any] {
+        var report = status()
+        report["bundleIdentifier"] = Bundle.main.bundleIdentifier
+        report["expectedProviderIdentifier"] = providerID
+        report["embeddedProviderIdentifier"] = (extensionBundle?.bundleIdentifier as Any?) ?? NSNull()
+        report["appGroup"] = Bundle.main.object(forInfoDictionaryKey: "FlClashAppGroup")
+        report["extensionAppGroup"] = extensionBundle?.object(forInfoDictionaryKey: "FlClashAppGroup") ?? NSNull()
+        report["appProvisioningProfilePresent"] = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision") != nil
+        report["extensionProvisioningProfilePresent"] = extensionBundle?.url(forResource: "embedded", withExtension: "mobileprovision") != nil
+        report["coreStorage"] = storage == nil ? "unresolved" : sharedStorageFailure == nil ? "shared" : "app-private"
+        report["errors"] = failures.keys.sorted().compactMap { failures[$0]?.details }
+        return report
     }
 
     private var activeSession: NETunnelProviderSession? {
-        guard let session = manager?.connection as? NETunnelProviderSession,
+        guard sharedStorageFailure == nil, let session = manager?.connection as? NETunnelProviderSession,
               session.status == .connected || session.status == .reasserting else { return nil }
         return session
     }
 
     private func status() -> [String: Any] {
+        let blocking = [vpnFailure, sharedStorageFailure, extensionFailure].compactMap { $0 }
+        if !blocking.isEmpty {
+            return ["state": "unavailable", "permissionDenied": blocking.contains(where: \.permissionDenied)]
+        }
         let connection = manager?.connection
         let value: String
         switch connection?.status {
@@ -114,15 +253,33 @@ final class VpnBridge {
     }
 
     private func invoke(_ request: CoreRequest, data: Data) async throws -> FlutterStandardTypedData {
-        let storage = try CoreStorage()
-        if request.method == "core.init" { version = request.arguments["version"] as? Int }
+        let storage = try runnerStorage(method: request.method)
         let session = Self.offlineMethods.contains(request.method) ? nil : activeSession
         let response: Data
-        if let session {
-            response = try await send(data, session: session, storage: storage)
-        } else {
-            response = try await withCheckedThrowingContinuation { continuation in
-                coreQueue.async { continuation.resume(with: Result { try CoreBridge.invoke(data) }) }
+        do {
+            if let session {
+                response = try await send(data, session: session, storage: storage)
+            } else {
+                response = try await withCheckedThrowingContinuation { continuation in
+                    coreQueue.async { continuation.resume(with: Result { try CoreBridge.invoke(data) }) }
+                }
+            }
+        } catch {
+            throw BridgeFailure(method: request.method, stage: session == nil ? "CoreBridge.invoke" : "sendProviderMessage",
+                                category: "core_invoke", cause: error as NSError)
+        }
+        if request.method == "core.init" {
+            do {
+                if let error = try CoreBridge.response(response)["error"] as? [String: Any] {
+                    let failure = NSError(domain: "FlClash.Core", code: 1,
+                                          userInfo: [NSLocalizedDescriptionKey: error["message"] as? String ?? "Core rejected initialization"])
+                    record(BridgeFailure(method: request.method, stage: "CoreBridge.response.\(error["code"] as? String ?? "unknown")",
+                                         category: "core_init", cause: failure))
+                } else {
+                    version = request.arguments["version"] as? Int
+                }
+            } catch {
+                throw BridgeFailure(method: request.method, stage: "CoreBridge.response", category: "core_init", cause: error as NSError)
             }
         }
         switch request.method {
@@ -130,7 +287,7 @@ final class VpnBridge {
         case "route.watch": subscriptions["route"] = data
         default: break
         }
-        if Self.savedMethods.contains(request.method), let version {
+        if sharedStorageFailure == nil, Self.savedMethods.contains(request.method), let version {
             let forTunnel = session != nil
             try await withCheckedThrowingContinuation { (reply: CheckedContinuation<Void, Error>) in
                 coreQueue.async {
@@ -195,11 +352,15 @@ final class VpnBridge {
         return try Data(contentsOf: response)
     }
 
-    private func existingManager() async throws -> NETunnelProviderManager? {
+    private func existingManager(method: String) async throws -> NETunnelProviderManager? {
         let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { continuation in
             NETunnelProviderManager.loadAllFromPreferences { managers, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: managers ?? []) }
+                if let error {
+                    continuation.resume(throwing: BridgeFailure(method: method, stage: "NETunnelProviderManager.loadAllFromPreferences",
+                                                                 category: "vpn", cause: error as NSError))
+                } else {
+                    continuation.resume(returning: managers ?? [])
+                }
             }
         }
         return managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerID }
@@ -212,9 +373,18 @@ final class VpnBridge {
         intent += 1
         let revision = intent
         await mutations?.value
-        _ = try CoreSnapshot(storage: CoreStorage())
-        let existing = try await existingManager()
+        let existing = try await existingManager(method: "start")
         guard intent == revision else { throw CancellationError() }
+        checkExtension()
+        if let failure = extensionFailure {
+            throw BridgeFailure(method: "start", stage: failure.stage, category: failure.category, cause: failure.cause)
+        }
+        let storage = try runnerStorage(method: "start")
+        if let failure = sharedStorageFailure {
+            throw BridgeFailure(method: "start", stage: failure.stage, category: failure.category, cause: failure.cause)
+        }
+        do { _ = try CoreSnapshot(storage: storage) }
+        catch { throw BridgeFailure(method: "start", stage: "CoreSnapshot.load", category: "storage", cause: error as NSError) }
         let vpn = existing ?? NETunnelProviderManager()
         if existing == nil || !vpn.isEnabled {
             let configuration = NETunnelProviderProtocol()
@@ -223,14 +393,22 @@ final class VpnBridge {
             vpn.protocolConfiguration = configuration
             vpn.localizedDescription = "FlClash"
             vpn.isEnabled = true
-            try await vpn.saveToPreferences()
-            try await vpn.loadFromPreferences()
+            do { try await vpn.saveToPreferences() }
+            catch { throw BridgeFailure(method: "start", stage: "saveToPreferences", category: "vpn", cause: error as NSError) }
+            do { try await vpn.loadFromPreferences() }
+            catch { throw BridgeFailure(method: "start", stage: "loadFromPreferences", category: "vpn", cause: error as NSError) }
         }
         guard intent == revision else { throw CancellationError() }
+        vpnFailure = nil
         manager = vpn
-        if vpn.connection.status != .connecting { try vpn.connection.startVPNTunnel() }
-        try await waitForStatus(running: true, revision: revision, connection: vpn.connection)
-        if let session = activeSession, let storage = try? CoreStorage() {
+        do {
+            if vpn.connection.status != .connecting { try vpn.connection.startVPNTunnel() }
+        } catch {
+            throw BridgeFailure(method: "start", stage: "startVPNTunnel", category: "vpn", cause: error as NSError)
+        }
+        do { try await waitForStatus(running: true, revision: revision, connection: vpn.connection) }
+        catch { throw BridgeFailure(method: "start", stage: "waitForConnection", category: "vpn", cause: error as NSError) }
+        if let session = activeSession {
             for data in Array(subscriptions.values) {
                 _ = try? await send(data, session: session, storage: storage, timeout: 2)
             }
@@ -240,7 +418,7 @@ final class VpnBridge {
     private func stop() async throws {
         intent += 1
         let revision = intent
-        if manager == nil { manager = try await existingManager() }
+        if manager == nil { manager = try await existingManager(method: "stop") }
         guard intent == revision else { throw CancellationError() }
         guard let connection = manager?.connection else { return }
         connection.stopVPNTunnel()

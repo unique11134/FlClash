@@ -44,6 +44,7 @@ class SetupAction extends _$SetupAction {
   _SetupInputs? _appliedInputs;
   var _lastPushDuration = Duration.zero;
   var _pendingForceApply = false;
+  var _iosVpnUnavailable = false;
 
   bool get _isRunning => _startTime != null && _startTime!.isBeforeNow;
 
@@ -62,6 +63,16 @@ class SetupAction extends _$SetupAction {
   }
 
   void _syncIOSStatus(IOSVpnStatus status) {
+    if (status.unavailable && !_iosVpnUnavailable) {
+      final l10n = currentAppLocalizations;
+      dialogs.showBanner(
+        status.permissionDenied
+            ? l10n.iosVpnSigningRequired
+            : l10n.iosVpnUnavailable,
+        level: BannerLevel.warning,
+      );
+    }
+    _iosVpnUnavailable = status.unavailable;
     if (status.running) {
       _startTime = status.connectedAt ?? _startTime ?? DateTime.now();
     } else {
@@ -170,7 +181,8 @@ class SetupAction extends _$SetupAction {
     if (_isRunning) {
       globalState.lastConfigMd5 = await preferences.getAppliedConfigMd5();
       await _run(true, initialize: true, resume: true);
-    } else if (ref.read(appSettingProvider).autoRun) {
+    } else if (ref.read(appSettingProvider).autoRun &&
+        !(system.isIOS && iosCore.lastStatus?.unavailable == true)) {
       await setRunning(true, initialize: true);
     } else {
       await globalState.safeRun(() => applyProfile(force: true));
