@@ -26,4 +26,15 @@ for platform in "$@"; do
         -o "$output/libFlClashCore.a" "$repo/ios/NativeCore/main.go"
     )
     xcrun lipo -verify_arch arm64 "$output/libFlClashCore.a"
+    xcrun nm -gUj "$output/libFlClashCore.a" > "$output/exports.txt"
+    awk 'match($0, /flclash_core_[a-z_]+\(/) { print substr($0, RSTART, RLENGTH - 1) }' \
+      "$repo/ios/NativeCore/FlClashCore.h" > "$output/expected-exports.txt"
+    test -s "$output/expected-exports.txt"
+    while IFS= read -r symbol; do
+      if ! grep -Fxq "_$symbol" "$output/exports.txt"; then
+        printf '%s: missing C export %s\n' "$platform" "$symbol" >&2
+        exit 1
+      fi
+      printf '%s: verified C export %s\n' "$platform" "$symbol"
+    done < "$output/expected-exports.txt"
 done

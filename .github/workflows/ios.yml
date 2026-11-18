@@ -23,7 +23,6 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 60
     env:
-      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       IPHONEOS_DEPLOYMENT_TARGET: '16.0'
     steps:
       - uses: actions/checkout@v4
@@ -34,18 +33,51 @@ jobs:
         run: |
           git submodule status --recursive | tee /tmp/flclash-submodules
           if grep -Eq '^[+-U]' /tmp/flclash-submodules; then exit 1; fi
-          xcodebuild -version
-          test "$(xcrun --sdk iphoneos --show-sdk-version)" = 27.2
+          mkdir -p build/ios-logs
+          {
+            unset DEVELOPER_DIR
+            if [[ "$(xcodebuild -version | sed -n '1p')" != 'Xcode 27.2' ]]; then
+              shopt -s nullglob
+              selected=
+              for candidate in /Applications/Xcode*.app; do
+                if version=$(plutil -extract CFBundleShortVersionString raw -o - "$candidate/Contents/Info.plist") &&
+                   [[ "$version" == '27.2' || "$version" == '27.2.0' ]]; then
+                  selected="$candidate/Contents/Developer"
+                  break
+                fi
+              done
+              if [[ -z "$selected" ]]; then
+                echo 'Xcode 27.2 was not found on this runner' >&2
+                exit 1
+              fi
+              sudo xcode-select --switch "$selected"
+            fi
+            developer_dir=$(xcode-select --print-path)
+            echo "$developer_dir"
+            echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+            xcodebuild -version
+            xcodebuild -showsdks
+            sdk=$(xcrun --sdk iphoneos --show-sdk-version)
+            echo "iPhoneOS SDK: $sdk"
+            test "$sdk" = 27.2
+          } 2>&1 | tee build/ios-logs/sdk.log
           pod --version
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: core/go.sum
+      - name: Prepare the pinned Core CA bundle
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" https://curl.se/ca/cacert-2026-09-25.pem
+          echo "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505  $bundle" | sha256sum -c -
+      - name: Compile mihomo and verify the iOS C ABI
+        run: bash tool/build_ios_core.sh 2>&1 | tee build/ios-logs/core.log
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: '3.47.6'
           cache: true
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.27.1'
-          cache-dependency-path: core/go.sum
       - name: Install pinned Rust and Apple targets
         working-directory: plugins/rust_api/rust
         run: |
@@ -55,11 +87,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: plugins/rust_api/rust
-      - name: Prepare the pinned Core CA bundle
-        run: |
-          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
-          curl -fsSL --retry 3 -o "$bundle" https://curl.se/ca/cacert-2026-09-25.pem
-          echo "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505  $bundle" | sha256sum -c -
       - name: Resolve packages and analyze
         run: |
           flutter --version
@@ -70,10 +97,6 @@ jobs:
         run: |
           (cd core && CGO_ENABLED=0 go test -mod=readonly ./...)
           flutter test test/core/ios_test.dart
-      - name: Compile mihomo for iOS and Simulator
-        run: |
-          mkdir -p build/ios-logs
-          bash tool/build_ios_core.sh 2>&1 | tee build/ios-logs/core.log
       - name: Resolve CocoaPods
         run: |
           flutter build ios --config-only --no-codesign
@@ -86,13 +109,20 @@ jobs:
         run: |
           app=build/ios/iphoneos/Runner.app
           extension="$app/PlugIns/PacketTunnel.appex"
-          test -x "$app/Runner"
-          test -x "$extension/PacketTunnel"
-          for binary in "$app/Runner" "$extension/PacketTunnel"; do
+          rust="$app/Frameworks/rust_api.framework/rust_api"
+          for binary in "$app/Runner" "$extension/PacketTunnel" "$rust"; do
+            test -x "$binary"
             xcrun lipo -verify_arch arm64 "$binary"
-            xcrun vtool -show-build "$binary"
+            build_info=$(xcrun vtool -show-build "$binary")
+            echo "$build_info"
+            grep -Eiq '^[[:space:]]*platform[[:space:]]+IOS[[:space:]]*$' <<< "$build_info"
           done
           plutil -lint "$app/Info.plist" "$extension/Info.plist"
+          app_id=$(plutil -extract CFBundleIdentifier raw -o - "$app/Info.plist")
+          extension_id=$(plutil -extract CFBundleIdentifier raw -o - "$extension/Info.plist")
+          test "$extension_id" = "$app_id.PacketTunnel"
+          extension_point=$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$extension/Info.plist")
+          test "$extension_point" = com.apple.networkextension.packet-tunnel
           tar -C build/ios/iphoneos -czf build/FlClash-iOS-arm64-unsigned.tar.gz Runner.app
       - name: Upload build logs
         if: always()
